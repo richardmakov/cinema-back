@@ -1,0 +1,43 @@
+# Entorno virtual
+env/
+venv/
+ENV/
+
+# Archivos de Python compilados
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Archivos temporales del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración de editores
+.vscode/
+.idea/
+
+# Archivos de base de datos locales
+*.sqlite3
+
+# Archivos de migración (opcional si quieres ignorarlos)
+# **/migrations/*.py
+# **/migrations/*.pyc
+
+# Secretos o archivos sensibles (si los tienes separados)
+.env
+
+# Archivos de logs
+*.log
+
+# Archivos de coverage o pruebas
+htmlcov/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Archivos generados por Django
+staticfiles/
+media/
