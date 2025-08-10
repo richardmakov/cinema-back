@@ -5,7 +5,8 @@ from rest_framework.response import Response
 
 from .models import Movie, Session, Booking
 from .serializers import MovieSerializer, SessionSerializer, BookingSerializer
-
+from django.db import transaction
+from django.db.models import F
 
 class MovieViewSet(viewsets.ModelViewSet):
     queryset = Movie.objects.all()
@@ -49,24 +50,48 @@ class BookingViewSet(viewsets.ModelViewSet):
     serializer_class = BookingSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        session = serializer.validated_data['session']
-        cantidad = serializer.validated_data['cantidad_asientos']
-        if session.asientos_disponibles < cantidad:
+        with transaction.atomic():
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+
+            # Bloquea la sesión hasta que termine la transacción
+            session = Session.objects.select_for_update().get(pk=serializer.validated_data['session'].pk)
+            cantidad = serializer.validated_data['cantidad_asientos']
+            seats = serializer.validated_data['asientos_seleccionados']
+
+            # Revalidación bajo bloqueo: ocupadas
+            qs = Booking.objects.filter(session=session) \
+                                .exclude(estado='cancelada') \
+                                .values_list('asientos_seleccionados', flat=True)
+            ocupadas = set()
+            for arr in qs:
+                if isinstance(arr, list):
+                    ocupadas.update(arr)
+
+            if ocupadas.intersection(seats):
+                return Response(
+                    {'detail': 'Alguna de las butacas ya está ocupada.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if session.asientos_disponibles < cantidad:
+                return Response(
+                    {'detail': 'No hay suficientes asientos disponibles.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Descontar disponibles de forma segura
+            session.asientos_disponibles = F('asientos_disponibles') - cantidad
+            session.save(update_fields=['asientos_disponibles'])
+            session.refresh_from_db(fields=['asientos_disponibles'])
+
+            instance = serializer.save(precio_total=session.precio * cantidad)
+            headers = self.get_success_headers(serializer.data)
             return Response(
-                {'detail': 'No hay suficientes asientos disponibles.'},
-                status=status.HTTP_400_BAD_REQUEST,
+                self.get_serializer(instance).data,
+                status=status.HTTP_201_CREATED,
+                headers=headers,
             )
-        session.asientos_disponibles -= cantidad
-        session.save()
-        instance = serializer.save(precio_total=session.precio * cantidad)
-        headers = self.get_success_headers(serializer.data)
-        return Response(
-            self.get_serializer(instance).data,
-            status=status.HTTP_201_CREATED,
-            headers=headers,
-        )
 
     @action(detail=False, methods=['get'], url_path='stats')
     def stats(self, request):
@@ -94,4 +119,14 @@ class BookingViewSet(viewsets.ModelViewSet):
         booking.estado = 'cancelada'
         booking.save()
         return Response({'status': 'cancelada'})
+    
+    @action(detail=False, methods=['get'], url_path=r'by_code/(?P<code>[^/]+)')
+    def by_code(self, request, code=None):
+        try:
+            booking = Booking.objects.select_related('session').get(codigo_reserva__iexact=code)
+        except Booking.DoesNotExist:
+            return Response({'detail': 'Reserva no encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = self.get_serializer(booking)
+        return Response(serializer.data)
+
 
